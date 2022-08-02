@@ -1,3 +1,4 @@
+from cgi import test
 import os
 import random
 import numpy as np
@@ -5,12 +6,77 @@ import numpy as np
 from collections import Counter
 from datetime import datetime
 from argparse import ArgumentParser
+from tqdm import tqdm
 
 import torch
 
 from data.data_utils import *
 from models.transformers import *
 from selection_methods import *
+
+
+def val(args, model, test_loader, criterion):
+    
+    model.eval()
+    val_acc = 0
+    val_loss = 0
+
+    for data, label in tqdm(test_loader):
+        data = data.to(args.device)
+        label = label.to(args.device)
+
+        output = model(data)
+        val_loss = criterion(output, label)
+
+        acc = (output.argmax(dim=1) == label).float().mean()
+        val_acc += acc / len(test_loader)
+        val_loss += val_loss / len(test_loader)
+    
+    return val_acc, val_loss
+
+
+def train(args, model, train_loader, test_loader, cycle, time):
+
+    # Save results
+    results = open(os.path.join("logs", args.name) + '/' + time + '_results_' + str(args.method_type) + '_' + args.dataset + '.txt', 'a')
+
+    # Prepare optimizer and scheduler
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=args.weight_decay)
+    criterion = nn.CrossEntropyLoss()
+    t_total = args.num_steps
+
+    # Train!
+
+    model.zero_grad()
+    #set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
+    global_step, best_acc = 0, 0
+    
+    for e in range(args.epochs):
+        epoch_loss = 0
+        epoch_accuracy = 0
+
+        for data, label in tqdm(train_loader):
+            data = data.to(args.device)
+            label = label.to(args.device)
+
+            output = model(data)
+            loss = criterion(output, label)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            optimizer.step()
+
+            acc = (output.argmax(dim=1) == label).float().mean()
+            epoch_accuracy += acc / len(train_loader)
+            epoch_loss += loss / len(train_loader)
+
+        with torch.no_grad():
+            if e % args.val_epoch == 0:
+                val_accuracy, val_loss = val(args, model, test_loader, criterion)
+
+        print() #############TODO###################
+
 
 def main():
     args.device = device
@@ -102,6 +168,7 @@ if __name__ == '__main__':
     parser.add_argument("-s", "--s_margin", type=float, default=0.1, help="Confidence margin of graph")
     parser.add_argument("-n", "--hidden_units", type=int, default=128,  help="Number of hidden units of the graph")
     parser.add_argument("-b", "--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--epochs", type=int, default=30, help="Transformer Training poch")
     parser.add_argument("--img_size", type=int, default=224, help="Resolution size")
     parser.add_argument("--patch_size", type=int, default=16, help="Patch size")
     parser.add_argument("--hidden_size", type=int, default=768, help="Hidden vector size for Transformer")
@@ -110,6 +177,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_layers", type=int, default=12, help="Number of Encoder Layers")
     parser.add_argument("--learning_rate", type=float, default=3e-2, help="Initial learning rate")
     parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay")
+    parser.add_argument("--val_epoch", type=int, default=5, help="Number of epochs for validation")
 
     args = parser.parse_args()
 
